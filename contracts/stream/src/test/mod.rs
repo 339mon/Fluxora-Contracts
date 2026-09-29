@@ -78,6 +78,10 @@ mod stream_count_consistency;
 mod read_methods_no_side_effects;
 mod read_ttl_matrix;
 
+// Issue #1804 — `MAX_BATCH_SIZE` calibrated against more than one token
+// implementation.
+mod token_batch_calibration;
+
 // Package / artifact naming gates, run by CI's `packaging::` step. Also
 // guards #1675 (no inert governance crate). Previously unregistered, so
 // that CI step matched zero tests.

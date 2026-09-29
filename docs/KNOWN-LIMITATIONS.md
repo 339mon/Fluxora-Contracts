@@ -194,22 +194,50 @@ testnet simulation and reconcile.
 
 ---
 
-## 3. `MAX_BATCH_SIZE` is calibrated against one token
+## 3. `MAX_BATCH_SIZE` is calibrated across token costs, not proven for every token
 
 **Pinned by:**
-`contracts/stream/src/test/resource_limits.rs::the_event_budget_is_not_the_binding_constraint_at_the_cap`.
-It measures the event cost at `MAX_BATCH_SIZE` using the Stellar Asset
-Contract, so a change to the event payload or SAC cost that makes the event
-budget binding fails the test and requires this limitation to be revisited.
+`contracts/stream/src/test/token_batch_calibration.rs`, which derives the
+implied ceiling for four token implementations of deliberately different
+per-transfer event cost, and
+`contracts/stream/src/test/resource_limits.rs::the_event_budget_is_not_the_binding_constraint_at_the_cap`,
+which measures the event cost at `MAX_BATCH_SIZE` against the Stellar Asset
+Contract.
 
-The cap is bounded by the **contract event budget**, and roughly half of the
-per-stream event cost is the *token's* `transfer` event, not Fluxora's
-`withdrawn` event. Measured against the Stellar Asset Contract. A SEP-41 token
-with a heavier event payload shifts the ceiling down.
+The cap is bounded by the **contract event budget** (16,384 bytes per
+transaction), and roughly half of the per-stream event cost is the *token's*
+`transfer` event rather than Fluxora's `withdrawn` event. The ceiling is
+therefore a function of the token. Measured at the cap of 16, counting the
+event budget alone:
 
-The 2x safety factor exists for this reason, but it is a margin, not a proof. An
-integrator standardising on an unusual token should re-run
-`cargo test resource_limits -- --nocapture` against it.
+| token profile | per-transfer event bytes | per-stream event bytes | events at 16 | implied ceiling |
+| --- | --- | --- | --- | --- |
+| no transfer event | 0 | 276 | 4,416 / 16,384 | 59 |
+| Stellar Asset Contract (baseline) | 236 | 512 | 8,192 / 16,384 | 32 |
+| ~256-byte transfer event | 412 | 688 | 11,008 / 16,384 | 23 |
+| ~2 KB transfer event | 2,204 | 2,480 | 39,680 / 16,384 | 6 |
+
+`MAX_BATCH_SIZE = 16` is safe for the first three. The Stellar Asset Contract
+keeps the documented 2x margin exactly (32 = 2 x 16), and even a ~256-byte
+transfer event still admits 23. The 2x factor remains a margin rather than a
+proof, but it now has a measured floor under it.
+
+It is **not** safe for the ~2 KB profile, whose implied ceiling of 6 is below
+the cap. A 16-element batch against such a token cannot fit in the event budget,
+and no contract-side check can detect that, because the cost lives inside the
+token's own event rather than Fluxora's. What the contract can do is refuse
+before the token is touched, and it does: more than 16 ids is rejected with
+`BatchTooLarge` (19) for every profile. The remaining limitation is
+client-side — an integrator standardising on a token with an unusually heavy
+transfer event must chunk below that token's implied ceiling, which for the
+~2 KB profile means chunks of 6.
+
+Re-run the calibration against your own token to get its number; the module
+prints the table above for the profiles it carries:
+
+```
+cargo test -p fluxora-stream --lib test::token_batch_calibration -- --nocapture
+```
 
 ---
 

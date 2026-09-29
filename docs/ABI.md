@@ -83,11 +83,30 @@ trial calls.
 
 The binding mainnet constraint is the **contract event budget** (16,384 bytes per
 transaction), not entry or instruction counts. Each stream in a batch emits a
-`withdrawn` event plus the token's `transfer` event — roughly 512 bytes per
-stream between them. With a heavier token event payload, 32 streams would risk
-exhausting the budget. **Sixteen is the measured ceiling with a 2x safety
-factor.** The measurement suite lives in `test::resource_limits` and runs in
-every CI build under the `Resource report` step.
+`withdrawn` event plus the token's `transfer` event. Against the Stellar Asset
+Contract that is 512 bytes per stream, so a full batch of 16 spends 8,192 of the
+16,384-byte budget — a 2x margin. The other half of that cost belongs to the
+*token*, so a heavier transfer event moves the ceiling, which is why the number
+is re-derived by measurement rather than assumed.
+
+`test::token_batch_calibration` derives the implied ceiling for four token
+profiles of deliberately different cost:
+
+| token profile | per-transfer event bytes | events at 16 | implied ceiling |
+| --- | --- | --- | --- |
+| no transfer event | 0 | 4,416 / 16,384 | 59 |
+| Stellar Asset Contract (baseline) | 236 | 8,192 / 16,384 | 32 |
+| ~256-byte transfer event | 412 | 11,008 / 16,384 | 23 |
+| ~2 KB transfer event | 2,204 | 39,680 / 16,384 | 6 |
+
+**Sixteen is the measured ceiling for the Stellar Asset Contract and every
+lighter token, with the documented 2x safety factor.** A token with a heavier
+transfer event shifts the ceiling down — the ~2 KB profile admits 6, not 16 —
+and the contract cannot detect that, because the cost lives inside the token's
+own event. What it does enforce is the cap itself: more than 16 ids is rejected
+with [`BatchTooLarge` (19)](#error) before the token is touched, whatever the
+token is. `test::resource_limits` pins the event cost at the cap for the
+baseline token; `docs/KNOWN-LIMITATIONS.md` §3 records the per-token ceilings.
 
 Client-side chunking is transparent to integrators: each chunk is a separate,
 atomic `batch_withdraw` or `batch_extend_ttl` call, and the SDK retries on
